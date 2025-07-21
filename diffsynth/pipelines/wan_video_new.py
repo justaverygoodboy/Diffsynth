@@ -229,6 +229,7 @@ class WanVideoPipeline(BasePipeline):
         self.vae: WanVideoVAE = None
         self.motion_controller: WanMotionControllerModel = None
         self.vace: VaceWanModel = None
+        self.audio_encoder = None
         self.in_iteration_models = ("dit", "motion_controller", "vace")
         self.unit_runner = PipelineUnitRunner()
         self.units = [
@@ -237,6 +238,7 @@ class WanVideoPipeline(BasePipeline):
             WanVideoUnit_InputVideoEmbedder(),
             WanVideoUnit_PromptEmbedder(),
             WanVideoUnit_ImageEmbedder(),
+            WanVideoUnit_AudioEmbedder(),
             WanVideoUnit_FunControl(),
             WanVideoUnit_FunReference(),
             WanVideoUnit_FunCameraControl(),
@@ -529,6 +531,9 @@ class WanVideoPipeline(BasePipeline):
         pipe.motion_controller = model_manager.fetch_model("wan_video_motion_controller")
         pipe.vace = model_manager.fetch_model("wan_video_vace")
 
+        from ..models import SimpleAudioEncoder
+        pipe.audio_encoder = SimpleAudioEncoder(output_dim=pipe.text_encoder.dim).to(device)
+
         # Initialize tokenizer
         tokenizer_config.download_if_necessary(local_model_path, skip_download=skip_download)
         pipe.prompter.fetch_models(pipe.text_encoder)
@@ -565,6 +570,7 @@ class WanVideoPipeline(BasePipeline):
         vace_video_mask: Optional[Image.Image] = None,
         vace_reference_image: Optional[Image.Image] = None,
         vace_scale: Optional[float] = 1.0,
+        audio_features: Optional[object] = None,
         # Randomness
         seed: Optional[int] = None,
         rand_device: Optional[str] = "cpu",
@@ -615,6 +621,7 @@ class WanVideoPipeline(BasePipeline):
             "control_video": control_video, "reference_image": reference_image,
             "camera_control_direction": camera_control_direction, "camera_control_speed": camera_control_speed, "camera_control_origin": camera_control_origin,
             "vace_video": vace_video, "vace_video_mask": vace_video_mask, "vace_reference_image": vace_reference_image, "vace_scale": vace_scale,
+            "audio_features": audio_features,
             "seed": seed, "rand_device": rand_device,
             "height": height, "width": width, "num_frames": num_frames,
             "cfg_scale": cfg_scale, "cfg_merge": cfg_merge,
@@ -866,6 +873,20 @@ class WanVideoUnit_ImageEmbedder(PipelineUnit):
         clip_context = clip_context.to(dtype=pipe.torch_dtype, device=pipe.device)
         y = y.to(dtype=pipe.torch_dtype, device=pipe.device)
         return {"clip_feature": clip_context, "y": y}
+
+
+class WanVideoUnit_AudioEmbedder(PipelineUnit):
+    def __init__(self):
+        super().__init__(input_params=("audio_features", "num_frames"))
+
+    def process(self, pipe: WanVideoPipeline, audio_features, num_frames):
+        if audio_features is None or pipe.audio_encoder is None:
+            return {}
+        if isinstance(audio_features, str):
+            from ..audio_utils import load_audio_features
+            audio_features = load_audio_features(audio_features, fps=25, num_frames=num_frames)
+        audio_embeds = pipe.audio_encoder(audio_features.to(device=pipe.device, dtype=pipe.torch_dtype))
+        return {"audio_embeds": audio_embeds}
 
         
  
@@ -1173,6 +1194,7 @@ def model_fn_wan_video(
     reference_latents = None,
     vace_context = None,
     vace_scale = 1.0,
+    audio_embeds: Optional[torch.Tensor] = None,
     tea_cache: TeaCache = None,
     use_unified_sequence_parallel: bool = False,
     motion_bucket_id: Optional[torch.Tensor] = None,
@@ -1221,6 +1243,9 @@ def model_fn_wan_video(
     if motion_bucket_id is not None and motion_controller is not None:
         t_mod = t_mod + motion_controller(motion_bucket_id).unflatten(1, (6, dit.dim))
     context = dit.text_embedding(context)
+    if audio_embeds is not None:
+        audio_embeds = audio_embeds.to(dtype=context.dtype, device=context.device)
+        context = torch.cat([context, audio_embeds], dim=1)
 
     x = latents
     # Merged cfg
