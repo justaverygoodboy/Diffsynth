@@ -72,6 +72,8 @@ class WanTrainingModule(DiffusionTrainingModule):
             inputs_shared["depth_video"] = data["depth_video"]  # 深度视频
         else:
             inputs_shared["depth_video"] = None
+        if "audio_features" in data:
+            inputs_shared["audio_features"] = data["audio_features"]
 
         # Extra inputs
         for extra_input in self.extra_inputs:
@@ -99,7 +101,9 @@ if __name__ == "__main__":
     parser = wan_parser()
      # 新增参数
     parser.add_argument("--depth_base_path", type=str, default=None, help="Base path for depth videos.")
-    parser.add_argument("--training_mode", type=str, default="rgb", choices=["rgb", "depth", "joint"], 
+    parser.add_argument("--audio_base_path", type=str, default=None, help="Base path for audio files.")
+    parser.add_argument("--fps", type=int, default=25, help="Frame rate for audio feature extraction.")
+    parser.add_argument("--training_mode", type=str, default="rgb", choices=["rgb", "depth", "joint"],
                        help="Training mode: rgb, depth, or joint training.")
     args = parser.parse_args()
     # 这里把参数传到数据集里面了

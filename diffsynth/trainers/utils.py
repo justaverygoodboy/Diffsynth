@@ -1,5 +1,6 @@
 import imageio, os, torch, warnings, torchvision, argparse, json
 from peft import LoraConfig, inject_adapter_in_model
+from ..audio_utils import load_audio_features
 from PIL import Image
 import pandas as pd
 from tqdm import tqdm
@@ -156,6 +157,11 @@ class VideoDataset(torch.utils.data.Dataset):
             num_frames = args.num_frames
             data_file_keys = args.data_file_keys.split(",")
             repeat = args.dataset_repeat
+            self.audio_base_path = getattr(args, "audio_base_path", None)
+            self.fps = getattr(args, "fps", 25)
+        else:
+            self.audio_base_path = None
+            self.fps = 25
         
         self.base_path = base_path
         self.num_frames = num_frames
@@ -171,8 +177,8 @@ class VideoDataset(torch.utils.data.Dataset):
         self.video_file_extension = video_file_extension
         self.repeat = repeat
 
-        self.depth_base_path = args.depth_base_path  # 深度视频路径
-        self.training_mode = args.training_mode
+        self.depth_base_path = getattr(args, "depth_base_path", None)
+        self.training_mode = getattr(args, "training_mode", "rgb")
         # print(f"🔧 训练模式: {self.training_mode}")
         # print("Depth base path:", self.depth_base_path)
 
@@ -181,6 +187,8 @@ class VideoDataset(torch.utils.data.Dataset):
             # 确保包含depth_video键
         if "depth_video" not in self.data_file_keys:
             self.data_file_keys = list(self.data_file_keys) + ["depth_video"]
+        if self.audio_base_path is not None and "audio" not in self.data_file_keys:
+            self.data_file_keys = list(self.data_file_keys) + ["audio"]
             # print(f"🔧 联合训练模式，数据文件键: {self.data_file_keys}")
 
         if height is not None and width is not None:
@@ -350,16 +358,25 @@ class VideoDataset(torch.utils.data.Dataset):
             return None
         
         # 加载深度视频
-        depth_path = os.path.join(self.depth_base_path, data["depth_video"])
-        depth_frames = self.load_data(depth_path)
+        depth_frames = None
+        depth_path = None
+        if self.depth_base_path is not None and "depth_video" in data:
+            depth_path = os.path.join(self.depth_base_path, data["depth_video"])
+            depth_frames = self.load_data(depth_path)
                 
         if depth_frames is None:
-            print(f"⚠️ 无法加载深度视频 {depth_path}，使用纯RGB")
+            if depth_path is not None:
+                print(f"⚠️ 无法加载深度视频 {depth_path}，使用纯RGB")
             data["video"] = rgb_frames
         else:
             # 垂直拼接RGB和深度视频
             concatenated_frames = self.concatenate_rgb_depth_frames(rgb_frames, depth_frames)
             data["video"] = concatenated_frames
+
+        # 加载音频特征
+        if self.audio_base_path is not None and "audio" in data:
+            audio_path = os.path.join(self.audio_base_path, data["audio"])
+            data["audio_features"] = load_audio_features(audio_path, fps=self.fps, num_frames=len(data["video"]))
         
         # 【修复】处理其他数据键的逻辑错误
         for key in self.data_file_keys:
@@ -517,6 +534,10 @@ def wan_parser():
     parser = argparse.ArgumentParser(description="Simple example of a training script.")
     parser.add_argument("--dataset_base_path", type=str, default="", required=True, help="Base path of the dataset.")
     parser.add_argument("--dataset_metadata_path", type=str, default=None, help="Path to the metadata file of the dataset.")
+    parser.add_argument("--depth_base_path", type=str, default=None, help="Base path for depth videos.")
+    parser.add_argument("--audio_base_path", type=str, default=None, help="Base path for audio files.")
+    parser.add_argument("--fps", type=int, default=25, help="Frame rate for audio feature extraction.")
+    parser.add_argument("--training_mode", type=str, default="rgb", choices=["rgb", "depth", "joint"], help="Training mode.")
     parser.add_argument("--max_pixels", type=int, default=1280*720, help="Maximum number of pixels per frame, used for dynamic resolution..")
     parser.add_argument("--height", type=int, default=None, help="Height of images or videos. Leave `height` and `width` empty to enable dynamic resolution.")
     parser.add_argument("--width", type=int, default=None, help="Width of images or videos. Leave `height` and `width` empty to enable dynamic resolution.")
