@@ -1,6 +1,9 @@
 accelerate launch examples/wanvideo/model_training/train.py \
   --dataset_base_path data/example_video_dataset \
   --dataset_metadata_path data/example_video_dataset/metadata.csv \
+  --depth_base_path data/example_depth_dataset \
+  --audio_base_path data/example_audio_dataset \
+  --fps 25 \
   --height 480 \
   --width 832 \
   --dataset_repeat 100 \
@@ -10,4 +13,5 @@ accelerate launch examples/wanvideo/model_training/train.py \
   --remove_prefix_in_ckpt "pipe.dit." \
   --output_path "./models/train/Wan2.1-Fun-V1.1-1.3B-InP_full" \
   --trainable_models "dit" \
-  --extra_inputs "input_image,end_image"
+  --training_mode joint \
+  --extra_inputs "input_image,end_image,audio_features"
